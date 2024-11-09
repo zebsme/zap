@@ -10,7 +10,7 @@ pub enum IO {
 }
 
 #[enum_dispatch(IO)]
-pub trait IOHandler {
+pub trait IOHandler: Send + Sync {
     fn read(&self, buf: &mut [u8], offset: u64) -> Result<usize>;
     fn write(&mut self, buf: &[u8]) -> Result<usize>;
     fn sync(&self) -> Result<()>;
