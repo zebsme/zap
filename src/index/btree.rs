@@ -1,8 +1,8 @@
-use super::{Indexer, KeyDirEntry};
-use crate::error::IndexError;
+use super::Indexer;
+use crate::{KeyDirEntry, Result};
 use bytes::Bytes;
 use parking_lot::RwLock;
-use std::{collections::BTreeMap, ops::Deref, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 #[allow(dead_code)]
 pub struct BTree(Arc<RwLock<BTreeMap<Vec<u8>, KeyDirEntry>>>);
@@ -19,15 +19,16 @@ impl Indexer for BTree {
     }
 
     fn delete(&self, key: Vec<u8>) -> Option<KeyDirEntry> {
-        let mut write_guard = self.write();
+        let mut write_guard = self.0.write();
         write_guard.remove(&key)
     }
 
-    fn list_keys(&self) -> Result<Vec<Bytes>, IndexError> {
+    fn list_keys(&self) -> Result<Vec<Bytes>> {
         Ok(self
+            .0
             .read()
             .iter()
-            .map(|(k, _)| Bytes::copy_from_slice(&k))
+            .map(|(k, _)| Bytes::copy_from_slice(k))
             .collect::<Vec<Bytes>>())
     }
 }
@@ -36,14 +37,6 @@ impl Indexer for BTree {
 impl BTree {
     fn new() -> Self {
         Self(Arc::new(RwLock::new(BTreeMap::new())))
-    }
-}
-
-impl Deref for BTree {
-    type Target = Arc<RwLock<BTreeMap<Vec<u8>, KeyDirEntry>>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 
@@ -63,134 +56,122 @@ mod tests {
     }
 
     #[test]
-    fn test_btree_put_new_entry() {
-        let btree = BTree::new();
+    fn test_hashmap_put_new_entry() {
+        let map = BTree::new();
 
         let key = b"key".to_vec();
-        let value = KeyDirEntry {
-            file_id: random_u32(),
-            offset: random_u64(),
-            size: random_u32(),
-        };
+        let value = KeyDirEntry::new(random_u32(), random_u64(), random_u32());
 
-        let result = btree.put(key.clone(), value);
+        let result = map.put(key.clone(), value);
         assert!(result.is_none(), "Expected None, got {:?}", result);
 
-        let retrieved = btree.get(key).unwrap();
-        assert_eq!(retrieved.file_id, value.file_id);
-        assert_eq!(retrieved.offset, value.offset);
-        assert_eq!(retrieved.size, value.size);
+        let retrieved = map.get(key).unwrap();
+        assert_eq!(retrieved.file_id(), value.file_id());
+        assert_eq!(retrieved.offset(), value.offset());
+        assert_eq!(retrieved.size(), value.size());
     }
 
     #[test]
-    fn test_btree_put_update_existing_entry() {
-        let btree = BTree::new();
+    fn test_hashmap_put_update_existing_entry() {
+        let map = BTree::new();
 
         let key = b"key".to_vec();
 
-        let value1 = KeyDirEntry {
-            file_id: random_u32(),
-            offset: random_u64(),
-            size: random_u32(),
-        };
+        let value1 = KeyDirEntry::new(random_u32(), random_u64(), random_u32());
 
-        let value2 = KeyDirEntry {
-            file_id: random_u32(),
-            offset: random_u64(),
-            size: random_u32(),
-        };
+        let value2 = KeyDirEntry::new(random_u32(), random_u64(), random_u32());
 
-        btree.put(key.clone(), value1);
-        let result = btree.put(key.clone(), value2);
+        map.put(key.clone(), value1);
+        let result = map.put(key.clone(), value2);
         assert!(result.is_some(), "Expected Some, got None");
 
         let retrieved = result.unwrap();
-        assert_eq!(retrieved.file_id, value1.file_id);
-        assert_eq!(retrieved.offset, value1.offset);
-        assert_eq!(retrieved.size, value1.size);
+        assert_eq!(retrieved.file_id(), value1.file_id());
+        assert_eq!(retrieved.offset(), value1.offset());
+        assert_eq!(retrieved.size(), value1.size());
     }
 
     #[test]
-    fn test_btree_get_existing_entry() {
-        let btree = BTree::new();
+    fn test_hashmap_get_existing_entry() {
+        let map = BTree::new();
 
-        let key1 = b"apple".to_vec();
-        let value1 = KeyDirEntry {
-            file_id: random_u32(),
-            offset: random_u64(),
-            size: random_u32(),
-        };
-        let key2 = b"banana".to_vec();
-        let value2 = KeyDirEntry {
-            file_id: random_u32(),
-            offset: random_u64(),
-            size: random_u32(),
-        };
+        let apple = b"apple".to_vec();
+        let apple_entry = KeyDirEntry::new(random_u32(), random_u64(), random_u32());
 
-        btree.put(key1.clone(), value1);
-        btree.put(key2.clone(), value2);
+        let banana = b"banana".to_vec();
+        let banana_entry = KeyDirEntry::new(random_u32(), random_u64(), random_u32());
 
-        let retrieved1 = btree.get(key1).unwrap();
-        assert_eq!(retrieved1.file_id, value1.file_id);
-        assert_eq!(retrieved1.offset, value1.offset);
-        assert_eq!(retrieved1.size, value1.size);
+        map.put(apple.clone(), apple_entry);
+        map.put(banana.clone(), banana_entry);
 
-        let retrieved2 = btree.get(key2).unwrap();
-        assert_eq!(retrieved2.file_id, value2.file_id);
-        assert_eq!(retrieved2.offset, value2.offset);
-        assert_eq!(retrieved2.size, value2.size);
+        match map.get(apple) {
+            Some(retrieved) => {
+                assert_eq!(retrieved.file_id(), apple_entry.file_id());
+                assert_eq!(retrieved.offset(), apple_entry.offset());
+                assert_eq!(retrieved.size(), apple_entry.size());
+            }
+            None => panic!("Expected Some, got None"),
+        }
+
+        match map.get(banana) {
+            Some(retrieved) => {
+                assert_eq!(retrieved.file_id(), banana_entry.file_id());
+                assert_eq!(retrieved.offset(), banana_entry.offset());
+                assert_eq!(retrieved.size(), banana_entry.size());
+            }
+            None => panic!("Expected Some, got None"),
+        }
     }
 
     #[test]
-    fn test_btree_get_non_existing_entry() {
-        let btree = BTree::new();
+    fn test_hashmap_get_non_existing_entry() {
+        let map = BTree::new();
 
         let key = b"key".to_vec();
 
-        let result = btree.get(key.clone());
+        let result = map.get(key.clone());
         assert!(result.is_none(), "Expected None, got {:?}", result);
     }
 
     #[test]
-    fn test_btree_delete_existing_entry() {
-        let btree = BTree::new();
+    fn test_hashmap_delete_existing_entry() {
+        let map = BTree::new();
 
-        let key1 = b"apple".to_vec();
-        let value1 = KeyDirEntry {
-            file_id: random_u32(),
-            offset: random_u64(),
-            size: random_u32(),
-        };
-        let key2 = b"banana".to_vec();
-        let value2 = KeyDirEntry {
-            file_id: random_u32(),
-            offset: random_u64(),
-            size: random_u32(),
-        };
+        let apple = b"apple".to_vec();
+        let apple_entry = KeyDirEntry::new(random_u32(), random_u64(), random_u32());
 
-        btree.put(key1.clone(), value1);
-        btree.put(key2.clone(), value2);
+        let banana = b"banana".to_vec();
+        let banana_entry = KeyDirEntry::new(random_u32(), random_u64(), random_u32());
 
-        let deleted1 = btree.delete(key1.clone());
-        assert!(deleted1.is_some(), "Expected Some, got None");
-        assert_eq!(deleted1.unwrap().file_id, value1.file_id);
-        assert_eq!(deleted1.unwrap().offset, value1.offset);
-        assert_eq!(deleted1.unwrap().size, value1.size);
+        map.put(apple.clone(), apple_entry);
+        map.put(banana.clone(), banana_entry);
 
-        let deleted2 = btree.delete(key2.clone());
-        assert!(deleted2.is_some(), "Expected Some, got None");
-        assert_eq!(deleted2.unwrap().file_id, value2.file_id);
-        assert_eq!(deleted2.unwrap().offset, value2.offset);
-        assert_eq!(deleted2.unwrap().size, value2.size);
+        match map.delete(apple.clone()) {
+            Some(deleted_entry) => {
+                assert_eq!(deleted_entry.file_id(), apple_entry.file_id());
+                assert_eq!(deleted_entry.offset(), apple_entry.offset());
+                assert_eq!(deleted_entry.size(), apple_entry.size());
+            }
+            None => panic!("Expected Some, got None"),
+        }
+
+        match map.delete(banana.clone()) {
+            Some(deleted_entry) => {
+                assert_eq!(deleted_entry.file_id(), banana_entry.file_id());
+                assert_eq!(deleted_entry.offset(), banana_entry.offset());
+                assert_eq!(deleted_entry.size(), banana_entry.size());
+            }
+            None => panic!("Expected Some, got None"),
+        }
     }
 
     #[test]
-    fn test_btree_delete_non_existing_entry() {
-        let btree = BTree::new();
+    fn test_hashmap_delete_non_existing_entry() {
+        let map = BTree::new();
 
         let key = b"key".to_vec();
 
-        let result = btree.delete(key.clone());
+        let result = map.delete(key.clone());
         assert!(result.is_none(), "Expected None, got {:?}", result);
     }
 }
