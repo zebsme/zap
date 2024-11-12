@@ -4,6 +4,7 @@ pub use standard::StandardIO;
 
 use crate::result::Result;
 
+#[derive(Debug, Clone)]
 #[enum_dispatch]
 pub enum IO {
     Standard(StandardIO),

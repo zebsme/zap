@@ -1,3 +1,6 @@
+use bytes::{Buf, BufMut, BytesMut};
+use prost::length_delimiter_len;
+
 use crate::{
     io::{IOHandler, IO},
     Result,
@@ -7,14 +10,16 @@ use std::sync::{
     Arc,
 };
 
-#[allow(dead_code)]
+use super::DataEntry;
+
+#[derive(Debug)]
 pub struct FileHandle {
     data: Arc<Datafile>,
     io: IO,
 }
 
-#[allow(dead_code)]
-pub struct Datafile {
+#[derive(Debug)]
+struct Datafile {
     file_id: AtomicU32,
     offset: AtomicU64,
 }
@@ -46,6 +51,62 @@ impl FileHandle {
             .store(current_offset + written as u64, Ordering::Release);
         Ok(written)
     }
+
+    pub fn sync(&self) -> Result<()> {
+        match &self.io {
+            IO::Standard(io) => io.sync(),
+        }
+    }
+
+    pub fn get_offset(&self) -> u64 {
+        self.data.get_offset()
+    }
+
+    pub fn write_data_entry() -> Result<()> {
+        Ok(())
+    }
+    pub fn extract_data_entry(&self, offset: u64) -> Result<DataEntry> {
+        let header_buf = BytesMut::with_capacity(
+            std::mem::size_of::<u8>() + length_delimiter_len(u32::MAX as usize) * 2,
+        );
+        let (key_size, value_size, actual_header_size, state) =
+            DataEntry::decode_header(header_buf)?;
+
+        // Read key and value，last 4 bytes crc
+        let mut body_buf = BytesMut::zeroed(key_size + value_size + 4);
+        self.read(&mut body_buf, offset + actual_header_size as u64)?;
+
+        body_buf.advance(key_size + value_size);
+        let data_entry = DataEntry::decode(body_buf, key_size, value_size, state)?;
+
+        Ok(data_entry)
+    }
+
+    fn encode_data_entry(&self, data_entry: DataEntry) -> Result<BytesMut> {
+        let mut buf = BytesMut::with_capacity(
+            std::mem::size_of::<u8>() + length_delimiter_len(u32::MAX as usize) * 2,
+        );
+
+        buf.put_u8(data_entry.get_state() as u8);
+        buf.put_u32(data_entry.get_key().len() as u32);
+        buf.put_u32(data_entry.get_value().len() as u32);
+
+        buf.put(data_entry.get_key().as_slice());
+        buf.put(data_entry.get_value().as_ref());
+        buf.put_u32(data_entry.get_crc()?);
+
+        Ok(buf)
+    }
+}
+
+// Manual Clone implementation for FileHandle
+impl Clone for FileHandle {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            io: self.io.clone(),
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -74,7 +135,6 @@ impl Datafile {
 mod tests {
     use super::*;
     use crate::io::StandardIO;
-    use anyhow::Result;
     use parking_lot::Mutex;
     use std::thread;
 
@@ -116,7 +176,7 @@ mod tests {
     fn test_concurrent_filehandle_updates() -> Result<()> {
         let io: IO = match StandardIO::new("/tmp/test_concurrent") {
             Ok(io) => io.into(),
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e),
         };
         let handle = Arc::new(FileHandle::new(1, io));
         let expected_offsets: Vec<u64> = (0..10).map(|i| i * 100).collect();
@@ -147,4 +207,27 @@ mod tests {
 
         Ok(())
     }
+
+    // //TODO: Add implementation
+    // #[test]
+    // fn test_extract_data_entry() -> Result<()> {
+    //     let io: IO = StandardIO::new("/tmp/test_extract_data_entry")?.into();
+    //     let mut handle = FileHandle::new(1, io);
+    //     let mut buf = vec![0; 10];
+    //     let res = handle.read(&mut buf, 100);
+
+    //     //Initialize data entry
+    //     let data_entry = DataEntry::new(
+    //         "key".as_bytes().to_vec(),
+    //         "value".as_bytes().to_vec(),
+    //         State::Active,
+    //     );
+    //     handle.write(&data_entry.encode()?)?;
+    //     assert!(res.is_ok());
+    //     assert_eq!(handle.data.get_offset(), 100);
+    //     handle.extract_data_entry(0)?;
+    //     // assert data entry
+
+    //     Ok(())
+    // }
 }

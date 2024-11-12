@@ -9,6 +9,7 @@ use std::{
     sync::Arc,
 };
 
+#[derive(Debug, Clone)]
 pub struct StandardIO {
     fd: Arc<RwLock<File>>,
 }

@@ -4,6 +4,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use std::sync::Arc;
 
+#[derive(Debug, Clone)]
 pub struct HashMap(Arc<DashMap<Vec<u8>, KeyDirEntry>>);
 
 impl Indexer for HashMap {
@@ -11,12 +12,12 @@ impl Indexer for HashMap {
         self.0.insert(key, entry)
     }
 
-    fn get(&self, key: Vec<u8>) -> Option<KeyDirEntry> {
-        self.0.get(&key).map(|r| *r.value())
+    fn get(&self, key: &[u8]) -> Option<KeyDirEntry> {
+        self.0.get(key).map(|r| *r.value())
     }
 
-    fn delete(&self, key: Vec<u8>) -> Option<KeyDirEntry> {
-        self.0.remove(&key).map(|(_, v)| v)
+    fn delete(&self, key: &[u8]) -> Option<KeyDirEntry> {
+        self.0.remove(key).map(|(_, v)| v)
     }
 
     fn list_keys(&self) -> Result<Vec<Bytes>> {
@@ -60,10 +61,10 @@ mod tests {
         let result = map.put(key.clone(), value);
         assert!(result.is_none(), "Expected None, got {:?}", result);
 
-        let retrieved = map.get(key).unwrap();
-        assert_eq!(retrieved.file_id(), value.file_id());
-        assert_eq!(retrieved.offset(), value.offset());
-        assert_eq!(retrieved.size(), value.size());
+        let retrieved = map.get(&key).unwrap();
+        assert_eq!(retrieved.get_file_id(), value.get_file_id());
+        assert_eq!(retrieved.get_offset(), value.get_offset());
+        assert_eq!(retrieved.get_size(), value.get_size());
     }
 
     #[test]
@@ -81,9 +82,9 @@ mod tests {
         assert!(result.is_some(), "Expected Some, got None");
 
         let retrieved = result.unwrap();
-        assert_eq!(retrieved.file_id(), value1.file_id());
-        assert_eq!(retrieved.offset(), value1.offset());
-        assert_eq!(retrieved.size(), value1.size());
+        assert_eq!(retrieved.get_file_id(), value1.get_file_id());
+        assert_eq!(retrieved.get_offset(), value1.get_offset());
+        assert_eq!(retrieved.get_size(), value1.get_size());
     }
 
     #[test]
@@ -99,20 +100,20 @@ mod tests {
         map.put(apple.clone(), apple_entry);
         map.put(banana.clone(), banana_entry);
 
-        match map.get(apple) {
+        match map.get(&apple) {
             Some(retrieved) => {
-                assert_eq!(retrieved.file_id(), apple_entry.file_id());
-                assert_eq!(retrieved.offset(), apple_entry.offset());
-                assert_eq!(retrieved.size(), apple_entry.size());
+                assert_eq!(retrieved.get_file_id(), apple_entry.get_file_id());
+                assert_eq!(retrieved.get_offset(), apple_entry.get_offset());
+                assert_eq!(retrieved.get_size(), apple_entry.get_size());
             }
             None => panic!("Expected Some, got None"),
         }
 
-        match map.get(banana) {
+        match map.get(&banana) {
             Some(retrieved) => {
-                assert_eq!(retrieved.file_id(), banana_entry.file_id());
-                assert_eq!(retrieved.offset(), banana_entry.offset());
-                assert_eq!(retrieved.size(), banana_entry.size());
+                assert_eq!(retrieved.get_file_id(), banana_entry.get_file_id());
+                assert_eq!(retrieved.get_offset(), banana_entry.get_offset());
+                assert_eq!(retrieved.get_size(), banana_entry.get_size());
             }
             None => panic!("Expected Some, got None"),
         }
@@ -124,7 +125,7 @@ mod tests {
 
         let key = b"key".to_vec();
 
-        let result = map.get(key.clone());
+        let result = map.get(&key);
         assert!(result.is_none(), "Expected None, got {:?}", result);
     }
 
@@ -141,20 +142,20 @@ mod tests {
         map.put(apple.clone(), apple_entry);
         map.put(banana.clone(), banana_entry);
 
-        match map.delete(apple.clone()) {
+        match map.delete(&apple) {
             Some(deleted_entry) => {
-                assert_eq!(deleted_entry.file_id(), apple_entry.file_id());
-                assert_eq!(deleted_entry.offset(), apple_entry.offset());
-                assert_eq!(deleted_entry.size(), apple_entry.size());
+                assert_eq!(deleted_entry.get_file_id(), apple_entry.get_file_id());
+                assert_eq!(deleted_entry.get_offset(), apple_entry.get_offset());
+                assert_eq!(deleted_entry.get_size(), apple_entry.get_size());
             }
             None => panic!("Expected Some, got None"),
         }
 
-        match map.delete(banana.clone()) {
+        match map.delete(&banana) {
             Some(deleted_entry) => {
-                assert_eq!(deleted_entry.file_id(), banana_entry.file_id());
-                assert_eq!(deleted_entry.offset(), banana_entry.offset());
-                assert_eq!(deleted_entry.size(), banana_entry.size());
+                assert_eq!(deleted_entry.get_file_id(), banana_entry.get_file_id());
+                assert_eq!(deleted_entry.get_offset(), banana_entry.get_offset());
+                assert_eq!(deleted_entry.get_size(), banana_entry.get_size());
             }
             None => panic!("Expected Some, got None"),
         }
@@ -166,7 +167,7 @@ mod tests {
 
         let key = b"key".to_vec();
 
-        let result = map.delete(key.clone());
+        let result = map.delete(&key);
         assert!(result.is_none(), "Expected None, got {:?}", result);
     }
 }
