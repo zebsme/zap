@@ -7,16 +7,15 @@ use crate::{
 };
 use bytes::Bytes;
 use dashmap::DashMap;
-use std::sync::atomic::Ordering;
 use std::{
     io::ErrorKind,
     ops::{Deref, DerefMut},
     sync::{atomic::AtomicU32, Arc},
 };
+use std::{path::Path, sync::atomic::Ordering};
 
 #[allow(dead_code)]
 pub struct Db {
-    options: Opts,
     ctx: Context,
     active_file: FileHandle,
     inactive_files: Arc<DashMap<u32, FileHandle>>,
@@ -27,7 +26,7 @@ pub struct Db {
 impl Db {
     fn open(&self) -> Result<()> {
         //Validate options
-        validate_options(&self.options)?;
+        validate_options(&self.ctx.opts)?;
         //Hint File
 
         Ok(())
@@ -35,27 +34,27 @@ impl Db {
 
     fn put(&mut self, key: Bytes, value: Bytes) -> Result<()> {
         // Check read-only state
-        if self.options.read_only {
+        if self.ctx.opts.read_only {
             return Err(Error::Io(ErrorKind::PermissionDenied.into()));
         }
 
         // Validate sizes
-        if key.is_empty() || key.len() > self.options.max_key_size {
+        if key.is_empty() || key.len() > self.ctx.opts.max_key_size {
             return Err(Error::Unsupported(format!(
                 "limited max_key_size: {}, actual key size:{}",
-                self.options.max_key_size,
+                self.ctx.opts.max_key_size,
                 key.len()
             )));
         }
-        if value.len() > self.options.max_value_size {
+        if value.len() > self.ctx.opts.max_value_size {
             return Err(Error::Unsupported(format!(
                 "limited max_value_size: {}, actual value size:{}",
-                self.options.max_key_size,
+                self.ctx.opts.max_key_size,
                 key.len()
             )));
         }
 
-        let dir_path = self.options.dir_path.clone();
+        let dir_path = self.ctx.opts.dir_path.clone();
 
         // Create entry
         let entry = DataEntry::new(key.clone(), value, State::Active);
@@ -64,7 +63,7 @@ impl Db {
 
         let record_len = encoded_entry.len() as u64;
 
-        if self.get_offset() + record_len > self.options.data_file_size {
+        if self.get_offset() + record_len > self.ctx.opts.data_file_size {
             // persist current active file
             self.sync()?;
 
@@ -75,11 +74,11 @@ impl Db {
             // create new file
             let new_file = FileHandle::new(
                 current_fid + 1,
-                StandardIO::new(format!(
-                    "{}/default{}",
-                    dir_path,
+                StandardIO::new(Path::new(&dir_path).join(format!(
+                    "{}-{}",
+                    self.ctx.opts.file_prefix,
                     self.file_id.load(Ordering::SeqCst)
-                ))?
+                )))?
                 .into(),
             );
             self.active_file = new_file;
@@ -102,10 +101,10 @@ impl Db {
 
     fn read(&self, key: Bytes) -> Result<Vec<u8>> {
         // Validate key
-        if key.is_empty() || key.len() > self.options.max_key_size {
+        if key.is_empty() || key.len() > self.ctx.opts.max_key_size {
             return Err(Error::Unsupported(format!(
                 "limited max_key_size: {}, actual key size:{}",
-                self.options.max_key_size,
+                self.ctx.opts.max_key_size,
                 key.len()
             )));
         }
@@ -192,18 +191,25 @@ impl DerefMut for Db {
 
 #[cfg(test)]
 mod tests {
-    use crate::io::{IOHandler, IO};
-
     use super::*;
+    use crate::io::{IOHandler, IO};
     use bytes::Bytes;
+    use std::thread;
 
     #[test]
     fn test_single_thread_put_and_read() {
-        let io: IO = StandardIO::new("/tmp/default").unwrap().into();
+        let io: IO = StandardIO::new("/tmp/put_and_read").unwrap().into();
         let file_id = io.get_file_id();
         let mut db = Db {
-            options: Opts::default(),
-            ctx: Context::new(io.get_file_id()),
+            ctx: Context::new(Opts::new(
+                256,
+                1024,
+                false,
+                true,
+                "/tmp".to_string(),
+                "put_and_read".to_string(),
+                1024 * 1024,
+            )),
             active_file: FileHandle::new(file_id, io),
             inactive_files: Arc::new(DashMap::new()),
             file_id: AtomicU32::from(file_id),
@@ -212,13 +218,69 @@ mod tests {
         for i in 1..100000 {
             let key = Bytes::from(format!("key{}", i));
             let value = Bytes::from(format!("value{}", i));
-            println!("key: {:?}, value: {:?}", key, value);
-            println!("{}", i);
             match db.put(key.clone(), value.clone()) {
                 Ok(_) => println!("put success: key: {:?}, value: {:?}", key, value),
                 Err(e) => println!("put error: {:?}", e),
             }
             assert_eq!(db.read(key.clone()).unwrap(), value);
         }
+    }
+
+    #[test]
+    fn test_concurrent_read() -> anyhow::Result<()> {
+        // Setup test DB
+        let io: IO = StandardIO::new("/tmp/concurrent_read").unwrap().into();
+        let file_id = io.get_file_id();
+        let mut db = Db {
+            ctx: Context::new(Opts::new(
+                256,
+                1024,
+                false,
+                true,
+                "/tmp".to_string(),
+                "concurrent_read".to_string(),
+                1024 * 1024,
+            )),
+            active_file: FileHandle::new(file_id, io),
+            inactive_files: Arc::new(DashMap::new()),
+            file_id: AtomicU32::from(file_id),
+        };
+
+        // Insert test data
+        for i in 0..1000000 {
+            let key = Bytes::from(format!("key{}", i));
+            let value = Bytes::from(format!("value{}", i));
+            db.put(key.clone(), value.clone())?;
+        }
+
+        // Create shared DB reference
+        let db = Arc::new(db);
+        let start = std::time::Instant::now();
+
+        // Spawn multiple reader threads
+        let mut handles = vec![];
+        for i in 0..1000 {
+            let db = db.clone();
+            let key = Bytes::from(format!("key{}", i));
+            let value = Bytes::from(format!("value{}", i));
+
+            let handle = thread::spawn(move || {
+                let read_value = db.read(key.clone()).unwrap();
+                assert_eq!(read_value, value, "Read value mismatch in thread {}", i);
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all reads to complete
+        for handle in handles {
+            handle
+                .join()
+                .map_err(|e| anyhow::anyhow!("Thread panicked: {:?}", e))?;
+        }
+
+        let duration = start.elapsed();
+        println!("All concurrent reads completed in {:?}", duration);
+
+        Ok(())
     }
 }
