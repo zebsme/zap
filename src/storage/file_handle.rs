@@ -1,8 +1,8 @@
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{BufMut, BytesMut};
 use prost::length_delimiter_len;
 
 use crate::{
-    io::{IOHandler, IO},
+    io::{IOHandler, StandardIO, IO},
     Result,
 };
 use std::sync::{
@@ -15,7 +15,8 @@ use super::DataEntry;
 #[derive(Debug)]
 pub struct FileHandle {
     data: Arc<Datafile>,
-    io: IO,
+    //FIXME:
+    pub io: IO,
 }
 
 #[derive(Debug)]
@@ -35,7 +36,6 @@ impl FileHandle {
 
     // Delegate IO operations to the internal IO implementation
     pub fn read(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
-        self.data.offset.store(offset, Ordering::Release);
         match &self.io {
             IO::Standard(io) => io.read(buf, offset),
         }
@@ -66,9 +66,10 @@ impl FileHandle {
         Ok(())
     }
     pub fn extract_data_entry(&self, offset: u64) -> Result<DataEntry> {
-        let header_buf = BytesMut::with_capacity(
+        let mut header_buf = BytesMut::zeroed(
             std::mem::size_of::<u8>() + length_delimiter_len(u32::MAX as usize) * 2,
         );
+        self.read(&mut header_buf, offset)?;
         let (key_size, value_size, actual_header_size, state) =
             DataEntry::decode_header(header_buf)?;
 
@@ -76,7 +77,7 @@ impl FileHandle {
         let mut body_buf = BytesMut::zeroed(key_size + value_size + 4);
         self.read(&mut body_buf, offset + actual_header_size as u64)?;
 
-        body_buf.advance(key_size + value_size);
+        // body_buf.advance(key_size + value_size);
         let data_entry = DataEntry::decode(body_buf, key_size, value_size, state)?;
 
         Ok(data_entry)
@@ -108,6 +109,14 @@ impl Clone for FileHandle {
         }
     }
 }
+impl Default for FileHandle {
+    fn default() -> Self {
+        Self {
+            data: Arc::new(Datafile::new(0)),
+            io: IO::Standard(StandardIO::new("/tmp/default").unwrap()),
+        }
+    }
+}
 
 #[allow(dead_code)]
 impl Datafile {
@@ -133,10 +142,12 @@ impl Datafile {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::io::StandardIO;
-    use parking_lot::Mutex;
     use std::thread;
+
+    use parking_lot::Mutex;
+
+    use super::*;
+    use crate::*;
 
     // Test Datafile basics
     #[test]
@@ -165,11 +176,11 @@ mod tests {
     #[test]
     fn test_filehandle_read() -> Result<()> {
         let io: IO = StandardIO::new("/tmp/test_filehandle_read")?.into();
-        let handle = FileHandle::new(1, io);
-        let mut buf = vec![0; 10];
-        let res = handle.read(&mut buf, 100);
-        assert!(res.is_ok());
-        assert_eq!(handle.data.get_offset(), 100);
+        let mut handle = FileHandle::new(1, io);
+        handle.write(b"helloworld")?;
+        let mut read_buf = vec![0; 10];
+        handle.read(&mut read_buf, 0)?;
+        assert_eq!(read_buf, b"helloworld");
         Ok(())
     }
     #[test]
@@ -178,17 +189,18 @@ mod tests {
             Ok(io) => io.into(),
             Err(e) => return Err(e),
         };
-        let handle = Arc::new(FileHandle::new(1, io));
-        let expected_offsets: Vec<u64> = (0..10).map(|i| i * 100).collect();
+        let handle = Arc::new(Mutex::new(FileHandle::new(3, io)));
+        let expected_offsets: Vec<u64> = (1..11).map(|i| i * 100).collect();
         let actual_offsets = Arc::new(Mutex::new(Vec::new()));
 
         let threads: Vec<_> = (0..10)
-            .map(|i| {
+            .map(|_| {
                 let handle = handle.clone();
                 let offsets = actual_offsets.clone();
                 thread::spawn(move || -> Result<()> {
-                    let mut buf = vec![0; 100];
-                    handle.read(&mut buf, i * 100)?;
+                    let buf = BytesMut::zeroed(100);
+                    let mut handle = handle.lock();
+                    handle.write(&buf)?;
                     offsets.lock().push(handle.data.get_offset());
                     Ok(())
                 })
@@ -203,31 +215,9 @@ mod tests {
         for expected in expected_offsets {
             assert!(final_offsets.contains(&expected));
         }
+
         assert_eq!(final_offsets.len(), 10);
 
         Ok(())
     }
-
-    // //TODO: Add implementation
-    // #[test]
-    // fn test_extract_data_entry() -> Result<()> {
-    //     let io: IO = StandardIO::new("/tmp/test_extract_data_entry")?.into();
-    //     let mut handle = FileHandle::new(1, io);
-    //     let mut buf = vec![0; 10];
-    //     let res = handle.read(&mut buf, 100);
-
-    //     //Initialize data entry
-    //     let data_entry = DataEntry::new(
-    //         "key".as_bytes().to_vec(),
-    //         "value".as_bytes().to_vec(),
-    //         State::Active,
-    //     );
-    //     handle.write(&data_entry.encode()?)?;
-    //     assert!(res.is_ok());
-    //     assert_eq!(handle.data.get_offset(), 100);
-    //     handle.extract_data_entry(0)?;
-    //     // assert data entry
-
-    //     Ok(())
-    // }
 }

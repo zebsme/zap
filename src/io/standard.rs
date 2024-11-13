@@ -4,7 +4,7 @@ use parking_lot::RwLock;
 use std::{
     fs::{File, OpenOptions},
     io::Write,
-    os::unix::fs::FileExt,
+    os::{fd::AsRawFd, unix::fs::FileExt},
     path::PathBuf,
     sync::Arc,
 };
@@ -19,9 +19,8 @@ impl StandardIO {
     pub fn new(path: impl Into<PathBuf>) -> Result<Self> {
         let file = OpenOptions::new()
             .read(true)
-            .write(true)
             .create(true)
-            .truncate(true)
+            .append(true)
             .open(path.into())?;
         Ok(StandardIO {
             fd: Arc::new(RwLock::new(file)),
@@ -43,6 +42,10 @@ impl IOHandler for StandardIO {
     fn sync(&self) -> Result<()> {
         let read_guard = self.fd.read();
         read_guard.sync_all().map_err(Error::from)
+    }
+    fn get_file_id(&self) -> u32 {
+        let read_guard = self.fd.read();
+        read_guard.as_raw_fd() as u32
     }
 }
 

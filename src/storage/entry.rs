@@ -107,8 +107,10 @@ impl DataEntry {
     }
 
     pub fn decode_header(mut header_buf: BytesMut) -> Result<(usize, usize, usize, u8)> {
+        //FIXME: when call put function
         let state = header_buf.get_u8();
 
+        // Get actual header size
         // Read key_size and value_size
         let key_size = decode_length_delimiter(&mut header_buf).unwrap();
         let value_size = decode_length_delimiter(&mut header_buf).unwrap();
@@ -137,7 +139,6 @@ impl DataEntry {
         );
 
         body_buf.advance(key_size + value_size);
-
         // Verify CRC
         if body_buf.get_u32() != data_entry.get_crc()? {
             return Err(Error::Unsupported("CRC check failed".to_string()));

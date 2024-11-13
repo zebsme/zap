@@ -31,7 +31,7 @@ impl Indexer for HashMap {
 
 #[allow(dead_code)]
 impl HashMap {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self(Arc::new(DashMap::new()))
     }
 }
