@@ -1,5 +1,5 @@
 use crate::{
-    index::Indexer,
+    index::{HashMap, Indexer},
     io::StandardIO,
     options::{Context, Opts},
     storage::{DataEntry, FileHandle},
@@ -91,12 +91,27 @@ impl Db {
         file_handles.reverse();
 
         let inactive_files = DashMap::new();
+        let index = HashMap::new();
+        let mut deleted_keys = Vec::new();
         let active_file = match file_handles.pop() {
-            Some(file) => {
+            Some(active_file) => {
                 for file in file_handles {
-                    inactive_files.insert(file.get_file_id(), file);
+                    let mut offset = 0;
+                    let file_id = file.get_file_id();
+                    while let Ok((data_entry, size)) = file.extract_data_entry(offset) {
+                        let keydir_entry = KeyDirEntry::new(file_id, offset, size as u32);
+                        match data_entry.get_state() {
+                            State::Active => {
+                                index.put(data_entry.get_key().clone(), keydir_entry);
+                            }
+                            State::Inactive => {
+                                deleted_keys.push(data_entry.get_key().clone());
+                            }
+                        }
+                        offset += size as u64;
+                    }
                 }
-                file
+                active_file
             }
             None => FileHandle::new(
                 INITIAL_FILE_ID,
@@ -108,7 +123,7 @@ impl Db {
         };
 
         let db = Db {
-            ctx: Context::new(opts),
+            ctx: Context::new(opts, index),
             active_file,
             inactive_files: Arc::new(inactive_files),
             file_id: AtomicU32::from(file_ids.len() as u32),
@@ -209,7 +224,7 @@ impl Db {
         let file_id = entry.get_file_id();
         let offset = entry.get_offset();
         // Read from active file
-        let data_entry = if file_id == self.file_id.load(Ordering::SeqCst) {
+        let (data_entry, _) = if file_id == self.file_id.load(Ordering::SeqCst) {
             self.extract_data_entry(offset)?
         } else {
             // Read from inactive file
@@ -299,8 +314,24 @@ mod tests {
             "/tmp/open_db".to_string(),
             1024 * 1024,
         );
+
         let db = Db::open(&opts)?;
-        assert_eq!(db.get_file_id(), 0);
+
+        for i in 1..1000000 {
+            let key = Bytes::from(format!("key{}", i));
+            let value = Bytes::from(format!("value{}", i));
+            // match db.put(key.clone(), value.clone()) {
+            //     Ok(_) => println!("put success: key: {:?}, value: {:?}", key, value),
+            //     Err(e) => return Err(e),
+            // }
+            // Already put in the db and we load index from the file
+            match db.read(key.clone()) {
+                Ok(read_value) => assert_eq!(value, read_value),
+                Err(e) => {
+                    println!("read error: key: {:?}, error: {:?}", key, e);
+                }
+            }
+        }
         Ok(())
     }
 

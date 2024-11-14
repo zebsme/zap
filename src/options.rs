@@ -61,10 +61,10 @@ impl Default for Context {
 
 #[allow(dead_code)]
 impl Context {
-    pub fn new(opts: &Opts) -> Self {
+    pub fn new(opts: &Opts, index: HashMap) -> Self {
         //TODO: Add support for other index types
         Self {
-            index: HashMap::new().into(),
+            index: index.into(),
             opts: opts.clone(),
         }
     }

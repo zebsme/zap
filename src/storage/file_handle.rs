@@ -69,7 +69,7 @@ impl FileHandle {
     pub fn write_data_entry() -> Result<()> {
         Ok(())
     }
-    pub fn extract_data_entry(&self, offset: u64) -> Result<DataEntry> {
+    pub fn extract_data_entry(&self, offset: u64) -> Result<(DataEntry, usize)> {
         let mut header_buf = BytesMut::zeroed(
             std::mem::size_of::<u8>() + length_delimiter_len(u32::MAX as usize) * 2,
         );
@@ -84,7 +84,7 @@ impl FileHandle {
         // body_buf.advance(key_size + value_size);
         let data_entry = DataEntry::decode(body_buf, key_size, value_size, state)?;
 
-        Ok(data_entry)
+        Ok((data_entry, actual_header_size + key_size + value_size + 4))
     }
 
     fn encode_data_entry(&self, data_entry: DataEntry) -> Result<BytesMut> {
