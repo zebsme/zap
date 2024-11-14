@@ -2,7 +2,7 @@ use bytes::{BufMut, BytesMut};
 use prost::length_delimiter_len;
 
 use crate::{
-    io::{IOHandler, StandardIO, IO},
+    io::{IOHandler, IO},
     Result,
 };
 use std::sync::{
@@ -14,13 +14,13 @@ use super::DataEntry;
 
 #[derive(Debug)]
 pub struct FileHandle {
-    data: Arc<Datafile>,
+    data: Arc<DataFile>,
     //FIXME:
     pub io: IO,
 }
 
 #[derive(Debug)]
-struct Datafile {
+struct DataFile {
     file_id: AtomicU32,
     offset: AtomicU64,
 }
@@ -29,7 +29,7 @@ struct Datafile {
 impl FileHandle {
     pub fn new(file_id: u32, io: IO) -> Self {
         Self {
-            data: Arc::new(Datafile::new(file_id)),
+            data: Arc::new(DataFile::new(file_id)),
             io,
         }
     }
@@ -60,6 +60,10 @@ impl FileHandle {
 
     pub fn get_offset(&self) -> u64 {
         self.data.get_offset()
+    }
+
+    pub fn get_file_id(&self) -> u32 {
+        self.data.get_file_id()
     }
 
     pub fn write_data_entry() -> Result<()> {
@@ -109,17 +113,9 @@ impl Clone for FileHandle {
         }
     }
 }
-impl Default for FileHandle {
-    fn default() -> Self {
-        Self {
-            data: Arc::new(Datafile::new(0)),
-            io: IO::Standard(StandardIO::new("/tmp/default").unwrap()),
-        }
-    }
-}
 
 #[allow(dead_code)]
-impl Datafile {
+impl DataFile {
     fn new(id: u32) -> Self {
         Self {
             file_id: AtomicU32::new(id),
@@ -148,18 +144,19 @@ mod tests {
 
     use super::*;
     use crate::*;
+    use io::StandardIO;
 
     // Test Datafile basics
     #[test]
     fn test_datafile_new() {
-        let file = Datafile::new(21);
+        let file = DataFile::new(21);
         assert_eq!(file.get_file_id(), 21);
         assert_eq!(file.get_offset(), 0);
     }
 
     #[test]
     fn test_set_get_offset() {
-        let file = Datafile::new(1);
+        let file = DataFile::new(1);
         file.set_offset(100);
         assert_eq!(file.get_offset(), 100);
     }

@@ -8,12 +8,15 @@ use crate::{
 use bytes::Bytes;
 use dashmap::DashMap;
 use std::{
+    fs::{create_dir_all, read_dir},
     io::ErrorKind,
     ops::{Deref, DerefMut},
     sync::{atomic::AtomicU32, Arc},
 };
 use std::{path::Path, sync::atomic::Ordering};
 
+const FILE_SUFFIX: &str = ".db";
+const INITIAL_FILE_ID: u32 = 0;
 #[allow(dead_code)]
 pub struct Db {
     ctx: Context,
@@ -24,12 +27,93 @@ pub struct Db {
 
 #[allow(dead_code)]
 impl Db {
-    fn open(&self) -> Result<()> {
+    fn open(opts: &Opts) -> Result<Self> {
         //Validate options
-        validate_options(&self.ctx.opts)?;
-        //Hint File
+        validate_options(opts)?;
 
-        Ok(())
+        //Get iterator of all files in the directory
+        let dir_path = opts.dir_path.clone();
+        if !dir_path.is_dir() {
+            if let Err(e) = create_dir_all(&opts.dir_path) {
+                return Err(Error::Io(e));
+            }
+        }
+
+        // return_dir will return an error in the following situations, but is not limited to just these cases:
+        // 1. The provided path doesn't exist.
+        // 2. The process lacks permissions to view the contents.
+        // 3. The path points at a non-directory file.
+        // we already checked if the path is a directory and created it if it doesn't exist
+        let dir_iter = match read_dir(&dir_path) {
+            Ok(iter) => iter,
+            Err(_) => return Err(Error::Io(ErrorKind::PermissionDenied.into())),
+        };
+
+        // TODO: Check the directory if it is already being used by another db
+
+        // Load all file_ids
+        let mut file_ids = dir_iter
+            .filter_map(|file| {
+                if let Ok(file) = file {
+                    let file_name = file.file_name().into_string().unwrap();
+                    if file_name.ends_with(FILE_SUFFIX) {
+                        let file_id = file_name.split(".").next().unwrap();
+                        let file_id = file_id.parse::<u32>().unwrap();
+                        Some(file_id)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<u32>>();
+
+        // Ensure that the file_ids are in order
+        file_ids.sort();
+
+        // Create file_handles
+        let mut file_handles = file_ids
+            .iter()
+            .map(|file_id| {
+                FileHandle::new(
+                    *file_id,
+                    StandardIO::new(
+                        Path::new(&opts.dir_path).join(format!("{}{}", file_id, FILE_SUFFIX)),
+                    )
+                    .unwrap()
+                    .into(),
+                )
+            })
+            .collect::<Vec<FileHandle>>();
+
+        // Let active file be the first file in the list
+        file_handles.reverse();
+
+        let inactive_files = DashMap::new();
+        let active_file = match file_handles.pop() {
+            Some(file) => {
+                for file in file_handles {
+                    inactive_files.insert(file.get_file_id(), file);
+                }
+                file
+            }
+            None => FileHandle::new(
+                INITIAL_FILE_ID,
+                StandardIO::new(
+                    Path::new(&dir_path).join(format!("{}{}", INITIAL_FILE_ID, FILE_SUFFIX,)),
+                )?
+                .into(),
+            ),
+        };
+
+        let db = Db {
+            ctx: Context::new(opts),
+            active_file,
+            inactive_files: Arc::new(inactive_files),
+            file_id: AtomicU32::from(file_ids.len() as u32),
+        };
+        Ok(db)
     }
 
     fn put(&mut self, key: Bytes, value: Bytes) -> Result<()> {
@@ -75,9 +159,9 @@ impl Db {
             let new_file = FileHandle::new(
                 current_fid + 1,
                 StandardIO::new(Path::new(&dir_path).join(format!(
-                    "{}-{}",
-                    self.ctx.opts.file_prefix,
-                    self.file_id.load(Ordering::SeqCst)
+                    "{}{}",
+                    self.file_id.load(Ordering::SeqCst),
+                    FILE_SUFFIX,
                 )))?
                 .into(),
             );
@@ -166,10 +250,19 @@ fn validate_options(options: &Opts) -> Result<()> {
         ));
     }
 
-    if options.dir_path.is_empty() {
-        return Err(Error::Unsupported(
-            "validate options error: dir_path is required".to_string(),
-        ));
+    match options.dir_path.to_str() {
+        Some(path) => {
+            if path.is_empty() {
+                return Err(Error::Unsupported(
+                    "validate options error: dir_path is required".to_string(),
+                ));
+            }
+        }
+        None => {
+            return Err(Error::Unsupported(
+                "validate options error: dir_path is required".to_string(),
+            ));
+        }
     }
 
     Ok(())
@@ -191,60 +284,61 @@ impl DerefMut for Db {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::io::{IOHandler, IO};
-    use bytes::Bytes;
     use std::thread;
 
-    #[test]
-    fn test_single_thread_put_and_read() {
-        let io: IO = StandardIO::new("/tmp/put_and_read").unwrap().into();
-        let file_id = io.get_file_id();
-        let mut db = Db {
-            ctx: Context::new(Opts::new(
-                256,
-                1024,
-                false,
-                true,
-                "/tmp".to_string(),
-                "put_and_read".to_string(),
-                1024 * 1024,
-            )),
-            active_file: FileHandle::new(file_id, io),
-            inactive_files: Arc::new(DashMap::new()),
-            file_id: AtomicU32::from(file_id),
-        };
+    use super::*;
+    use bytes::Bytes;
 
-        for i in 1..100000 {
+    #[test]
+    fn test_open_db() -> Result<()> {
+        let opts = Opts::new(
+            256,
+            1024,
+            false,
+            true,
+            "/tmp/open_db".to_string(),
+            1024 * 1024,
+        );
+        let db = Db::open(&opts)?;
+        assert_eq!(db.get_file_id(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_single_thread_put_and_read() -> Result<()> {
+        let opts = Opts::new(
+            256,
+            1024,
+            false,
+            true,
+            "/tmp/put_and_read".to_string(),
+            1024 * 1024,
+        );
+        let mut db = Db::open(&opts)?;
+
+        for i in 1..1000000 {
             let key = Bytes::from(format!("key{}", i));
             let value = Bytes::from(format!("value{}", i));
             match db.put(key.clone(), value.clone()) {
                 Ok(_) => println!("put success: key: {:?}, value: {:?}", key, value),
-                Err(e) => println!("put error: {:?}", e),
+                Err(e) => return Err(e),
             }
             assert_eq!(db.read(key.clone()).unwrap(), value);
         }
+        Ok(())
     }
 
     #[test]
     fn test_concurrent_read() -> anyhow::Result<()> {
-        // Setup test DB
-        let io: IO = StandardIO::new("/tmp/concurrent_read").unwrap().into();
-        let file_id = io.get_file_id();
-        let mut db = Db {
-            ctx: Context::new(Opts::new(
-                256,
-                1024,
-                false,
-                true,
-                "/tmp".to_string(),
-                "concurrent_read".to_string(),
-                1024 * 1024,
-            )),
-            active_file: FileHandle::new(file_id, io),
-            inactive_files: Arc::new(DashMap::new()),
-            file_id: AtomicU32::from(file_id),
-        };
+        let opts = Opts::new(
+            256,
+            1024,
+            false,
+            true,
+            "/tmp/concurrent_read".to_string(),
+            1024 * 1024,
+        );
+        let mut db = Db::open(&opts)?;
 
         // Insert test data
         for i in 0..1000000 {
