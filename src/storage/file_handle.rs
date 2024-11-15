@@ -66,6 +66,10 @@ impl FileHandle {
         self.data.get_file_id()
     }
 
+    pub fn set_offset(&self, new_offset: u64) {
+        self.data.set_offset(new_offset);
+    }
+
     pub fn write_data_entry() -> Result<()> {
         Ok(())
     }

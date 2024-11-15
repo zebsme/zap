@@ -6,7 +6,7 @@ use prost::{decode_length_delimiter, encode_length_delimiter, length_delimiter_l
 use crate::Error;
 use crate::Result;
 
-#[allow(dead_code)]
+#[derive(Debug)]
 pub struct DataEntry {
     key: Vec<u8>,
     value: Vec<u8>,

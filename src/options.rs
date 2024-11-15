@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::index::{HashMap, IndexMode};
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Opts {
     pub max_key_size: usize,
     pub max_value_size: usize,
@@ -12,6 +12,7 @@ pub struct Opts {
     pub data_file_size: u64,
 }
 
+#[derive(Debug)]
 pub struct Context {
     pub index: IndexMode,
     pub opts: Opts,
