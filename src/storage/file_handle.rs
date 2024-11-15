@@ -15,7 +15,6 @@ use super::DataEntry;
 #[derive(Debug)]
 pub struct FileHandle {
     data: Arc<DataFile>,
-    //FIXME:
     pub io: IO,
 }
 

@@ -294,6 +294,20 @@ impl Db {
         }
         Ok(data_entry)
     }
+
+    pub fn sync(&mut self) -> Result<()> {
+        self.active_file.sync()
+    }
+
+    pub fn close(&mut self) -> Result<()> {
+        if !self.ctx.opts.dir_path.is_dir() {
+            return Ok(());
+        }
+
+        self.sync()?;
+
+        Ok(())
+    }
 }
 
 fn validate_options(options: &Opts) -> Result<()> {
@@ -497,6 +511,42 @@ mod tests {
                 Error::Unsupported("Db read error: Key not found".to_string()).to_string()
             );
         }
+        Ok(())
+    }
+    #[test]
+    fn test_sync() -> Result<()> {
+        let opts = Opts::new(256, 1024, false, true, "/tmp/sync".to_string(), 1024 * 1024);
+        let mut db = Db::open(&opts).expect("failed to open engine");
+
+        let key = Bytes::from("key");
+        let value = Bytes::from("value");
+        db.put(key.clone(), value)?;
+
+        let close_res = db.sync();
+        assert!(close_res.is_ok());
+
+        Ok(())
+    }
+    #[test]
+    fn test_close() -> Result<()> {
+        let opts = Opts::new(
+            256,
+            1024,
+            false,
+            true,
+            "/tmp/close".to_string(),
+            1024 * 1024,
+        );
+        let mut db = Db::open(&opts)?;
+
+        let key = Bytes::from("key");
+        let value = Bytes::from("value");
+        db.put(key, value)?;
+
+        let close_res = db.close();
+        assert!(close_res.is_ok());
+
+        std::fs::remove_dir_all(opts.clone().dir_path).expect("failed to remove path");
         Ok(())
     }
 }
