@@ -13,10 +13,11 @@ pub struct DataEntry {
     state: State,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
     Active,
     Inactive,
+    Committed,
 }
 
 impl From<u8> for State {
@@ -24,6 +25,7 @@ impl From<u8> for State {
         match v {
             0 => State::Active,
             1 => State::Inactive,
+            2 => State::Committed,
             //TODO: should panic?
             _ => panic!("Invalid state value"),
         }
@@ -147,10 +149,7 @@ impl DataEntry {
     }
 
     pub fn is_active(&self) -> bool {
-        match self.state {
-            State::Active => true,
-            State::Inactive => false,
-        }
+        matches!(self.state, State::Active)
     }
 }
 

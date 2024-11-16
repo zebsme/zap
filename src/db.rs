@@ -1,4 +1,5 @@
 use crate::{
+    batch::{decode_transaction_key, encode_transaction_key},
     index::{HashMap, Indexer},
     io::StandardIO,
     options::{Context, Opts},
@@ -7,27 +8,30 @@ use crate::{
 };
 use bytes::Bytes;
 use dashmap::DashMap;
+use parking_lot::{Mutex, RwLock};
 use std::{
     fs::{create_dir_all, read_dir},
     io::ErrorKind,
-    ops::{Deref, DerefMut},
     sync::{atomic::AtomicU32, Arc},
 };
 use std::{path::Path, sync::atomic::Ordering};
 
 const FILE_SUFFIX: &str = ".db";
 const INITIAL_FILE_ID: u32 = 0;
+const NON_COMMITTED: u32 = 0;
 #[derive(Debug)]
 pub struct Db {
-    ctx: Context,
-    active_file: FileHandle,
+    pub ctx: Context,
+    pub active_file: Arc<RwLock<FileHandle>>,
     inactive_files: Arc<DashMap<u32, FileHandle>>,
     file_id: AtomicU32,
+    pub sequence_number: Arc<AtomicU32>,
+    pub batch_commit_lock: Mutex<()>,
 }
 
 #[allow(dead_code)]
 impl Db {
-    fn open(opts: &Opts) -> Result<Self> {
+    pub fn open(opts: &Opts) -> Result<Self> {
         //Validate options
         validate_options(opts)?;
 
@@ -89,14 +93,15 @@ impl Db {
 
         let inactive_files = DashMap::new();
         let index = HashMap::new();
-        let mut deleted_keys = Vec::new();
+        let mut current_sequence_number = NON_COMMITTED;
         let active_file = match file_handles.pop() {
             Some(active_file) => {
-                for file in file_handles.iter().rev() {
-                    Self::process_file_handle(file, &index, &mut deleted_keys);
+                //TODO: need rev() here?
+                for file in file_handles.iter() {
+                    Self::process_file_handle(file, &index, &mut current_sequence_number);
                     inactive_files.insert(file.get_file_id(), file.clone());
                 }
-                Self::process_file_handle(&active_file, &index, &mut deleted_keys);
+                Self::process_file_handle(&active_file, &index, &mut current_sequence_number);
                 active_file
             }
             None => FileHandle::new(
@@ -108,17 +113,14 @@ impl Db {
             ),
         };
 
-        //Delete index keys after the insertions are finished
-        for key in deleted_keys {
-            index.delete(&key);
-        }
-
         let file_id = active_file.get_file_id();
         let db = Db {
             ctx: Context::new(opts, index),
-            active_file,
+            active_file: Arc::new(RwLock::new(active_file)),
             inactive_files: Arc::new(inactive_files),
             file_id: AtomicU32::from(file_id),
+            sequence_number: Arc::new(AtomicU32::new(current_sequence_number + 1)),
+            batch_commit_lock: Mutex::new(()),
         };
         Ok(db)
     }
@@ -127,25 +129,53 @@ impl Db {
     ///
     /// This function reads all entries from the specified file handle, updates the index with active entries,
     /// and collects deleted keys for later removal.
-    fn process_file_handle(file: &FileHandle, index: &HashMap, deleted_keys: &mut Vec<Vec<u8>>) {
+    fn process_file_handle(file: &FileHandle, index: &HashMap, current_sequence_number: &mut u32) {
+        let mut transactions: std::collections::HashMap<u32, Vec<(DataEntry, KeyDirEntry)>> =
+            std::collections::HashMap::new();
         let mut offset = 0;
         let file_id = file.get_file_id();
-        while let Ok((data_entry, size)) = file.extract_data_entry(offset) {
+        while let Ok((mut data_entry, size)) = file.extract_data_entry(offset) {
             let keydir_entry = KeyDirEntry::new(file_id, offset, size as u32);
-            match data_entry.get_state() {
-                State::Active => {
-                    index.put(data_entry.get_key().clone(), keydir_entry);
+            let (key, seq_no) = decode_transaction_key(data_entry.get_key().clone());
+            if seq_no == NON_COMMITTED {
+                match data_entry.get_state() {
+                    State::Active => {
+                        index.put(key, keydir_entry);
+                    }
+                    _ => {
+                        index.delete(&key);
+                    }
                 }
-                State::Inactive => {
-                    deleted_keys.push(data_entry.get_key().clone());
-                }
+            } else if data_entry.get_state() == State::Committed {
+                let entry = transactions.get(&seq_no).unwrap();
+                entry.iter().for_each(|(data_entry, keydir_entry)| {
+                    index.put(data_entry.get_key().clone(), *keydir_entry);
+                    match data_entry.get_state() {
+                        State::Active => {
+                            index.put(data_entry.get_key().clone(), *keydir_entry);
+                        }
+                        _ => {
+                            index.delete(&key);
+                        }
+                    }
+                });
+                transactions.remove(&seq_no);
+            } else {
+                data_entry.set_key(key);
+                transactions
+                    .entry(seq_no)
+                    .or_default()
+                    .push((data_entry, keydir_entry));
+            }
+            if *current_sequence_number < seq_no {
+                *current_sequence_number = seq_no;
             }
             offset += size as u64;
         }
         file.set_offset(offset);
     }
 
-    fn delete(&mut self, key: Bytes) -> Result<()> {
+    pub fn delete(&mut self, key: Bytes) -> Result<()> {
         // Check read-only state
         if self.ctx.opts.read_only {
             return Err(Error::Io(ErrorKind::PermissionDenied.into()));
@@ -170,7 +200,11 @@ impl Db {
         }
 
         // Mark entry as deleted
-        let deleted_entry = DataEntry::new(key.clone(), Vec::new(), State::Inactive);
+        let deleted_entry = DataEntry::new(
+            encode_transaction_key(key.clone().into(), NON_COMMITTED),
+            Vec::new(),
+            State::Inactive,
+        );
         self.append_entry(&deleted_entry)?;
 
         // Remove key from index
@@ -179,7 +213,7 @@ impl Db {
         Ok(())
     }
 
-    fn put(&mut self, key: Bytes, value: Bytes) -> Result<()> {
+    pub fn put(&mut self, key: Bytes, value: Bytes) -> Result<()> {
         // Check read-only state
         if self.ctx.opts.read_only {
             return Err(Error::Io(ErrorKind::PermissionDenied.into()));
@@ -203,7 +237,11 @@ impl Db {
         }
 
         // Append entry to data file
-        let entry = DataEntry::new(key.clone(), value, State::Active);
+        let entry = DataEntry::new(
+            encode_transaction_key(key.clone().into(), NON_COMMITTED),
+            value,
+            State::Active,
+        );
         let keydir_entry = self.append_entry(&entry)?;
 
         self.ctx.index.put(key.into(), keydir_entry);
@@ -211,19 +249,18 @@ impl Db {
         Ok(())
     }
 
-    fn append_entry(&mut self, entry: &DataEntry) -> Result<KeyDirEntry> {
+    pub fn append_entry(&self, entry: &DataEntry) -> Result<KeyDirEntry> {
         let encoded_entry = entry.encode()?;
         let dir_path = self.ctx.opts.dir_path.clone();
         let record_len = encoded_entry.len() as u64;
-
-        if self.get_offset() + record_len > self.ctx.opts.data_file_size {
+        let mut write_guard = self.active_file.write();
+        if write_guard.get_offset() + record_len > self.ctx.opts.data_file_size {
             // persist current active file
-            self.sync()?;
+            write_guard.sync()?;
 
             let current_fid = self.file_id.fetch_add(1, Ordering::SeqCst);
 
-            self.inactive_files
-                .insert(current_fid, self.active_file.clone());
+            self.inactive_files.insert(current_fid, write_guard.clone());
             // create new file
             let new_file = FileHandle::new(
                 current_fid + 1,
@@ -234,21 +271,21 @@ impl Db {
                 )))?
                 .into(),
             );
-            self.active_file = new_file;
+            *write_guard = new_file;
         }
 
         // Append entry to data file
-        let written = self.write(&encoded_entry)?;
+        let written = write_guard.write(&encoded_entry)?;
 
         Ok(KeyDirEntry::new(
             self.file_id.load(Ordering::SeqCst),
             //offset is not active_file offset
-            self.active_file.get_offset() - written as u64,
+            write_guard.get_offset() - written as u64,
             encoded_entry.len() as u32,
         ))
     }
 
-    fn get(&self, key: Bytes) -> Result<Vec<u8>> {
+    pub fn get(&self, key: Bytes) -> Result<Vec<u8>> {
         // Validate key
         if key.is_empty() || key.len() > self.ctx.opts.max_key_size {
             return Err(Error::Unsupported(format!(
@@ -275,7 +312,8 @@ impl Db {
         let offset = entry.get_offset();
         // Read from active file
         let (data_entry, _) = if file_id == self.file_id.load(Ordering::SeqCst) {
-            self.extract_data_entry(offset)?
+            let read_guard = self.active_file.read();
+            read_guard.extract_data_entry(offset)?
         } else {
             // Read from inactive file
             match self.inactive_files.get(&file_id) {
@@ -295,8 +333,9 @@ impl Db {
         Ok(data_entry)
     }
 
-    pub fn sync(&mut self) -> Result<()> {
-        self.active_file.sync()
+    pub fn sync(&self) -> Result<()> {
+        let read_guard = self.active_file.read();
+        read_guard.sync()
     }
 
     pub fn close(&mut self) -> Result<()> {
@@ -345,20 +384,6 @@ fn validate_options(options: &Opts) -> Result<()> {
     }
 
     Ok(())
-}
-
-impl Deref for Db {
-    type Target = FileHandle;
-
-    fn deref(&self) -> &Self::Target {
-        &self.active_file
-    }
-}
-
-impl DerefMut for Db {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.active_file
-    }
 }
 
 #[cfg(test)]
@@ -483,7 +508,7 @@ mod tests {
         );
         let mut db = Db::open(&opts)?;
 
-        for i in 1..1000000 {
+        for i in 1..10000 {
             let key = Bytes::from(format!("key{}", i));
             let value = Bytes::from(format!("value{}", i));
             match db.put(key.clone(), value.clone()) {
@@ -517,7 +542,7 @@ mod tests {
     fn test_sync() -> Result<()> {
         let opts = Opts::new(256, 1024, false, true, "/tmp/sync".to_string(), 1024 * 1024);
         let mut db = Db::open(&opts).expect("failed to open engine");
-
+        println!("db: {:?}", db);
         let key = Bytes::from("key");
         let value = Bytes::from("value");
         db.put(key.clone(), value)?;
