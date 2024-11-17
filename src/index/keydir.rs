@@ -1,5 +1,5 @@
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyDirEntry {
     file_id: u32,
     offset: u64,

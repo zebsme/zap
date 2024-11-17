@@ -2,6 +2,7 @@ mod batch;
 mod db;
 mod index;
 mod io;
+mod merge;
 mod options;
 mod result;
 mod storage;

@@ -23,7 +23,7 @@ const NON_COMMITTED: u32 = 0;
 pub struct Db {
     pub ctx: Context,
     pub active_file: Arc<RwLock<FileHandle>>,
-    inactive_files: Arc<DashMap<u32, FileHandle>>,
+    pub inactive_files: Arc<DashMap<u32, FileHandle>>,
     file_id: AtomicU32,
     pub sequence_number: Arc<AtomicU32>,
     pub batch_commit_lock: Mutex<()>,
