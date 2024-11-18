@@ -18,7 +18,7 @@ use std::{path::Path, sync::atomic::Ordering};
 
 const FILE_SUFFIX: &str = ".db";
 const INITIAL_FILE_ID: u32 = 0;
-const NON_COMMITTED: u32 = 0;
+pub(crate) const NON_COMMITTED: u32 = 0;
 #[derive(Debug)]
 pub struct Db {
     pub ctx: Context,
@@ -96,7 +96,6 @@ impl Db {
         let mut current_sequence_number = NON_COMMITTED;
         let active_file = match file_handles.pop() {
             Some(active_file) => {
-                //TODO: need rev() here?
                 for file in file_handles.iter() {
                     Self::process_file_handle(file, &index, &mut current_sequence_number);
                     inactive_files.insert(file.get_file_id(), file.clone());
@@ -285,6 +284,27 @@ impl Db {
         ))
     }
 
+    pub fn rotate_active_file(&self) -> Result<()> {
+        // persist current active file
+        let mut write_guard = self.active_file.write();
+        write_guard.sync()?;
+
+        let current_fid = self.file_id.fetch_add(1, Ordering::SeqCst);
+
+        self.inactive_files.insert(current_fid, write_guard.clone());
+        // create new file
+        let new_file = FileHandle::new(
+            current_fid + 1,
+            StandardIO::new(Path::new(&self.ctx.opts.dir_path).join(format!(
+                "{}{}",
+                self.file_id.load(Ordering::SeqCst),
+                FILE_SUFFIX,
+            )))?
+            .into(),
+        );
+        *write_guard = new_file;
+        Ok(())
+    }
     pub fn get(&self, key: Bytes) -> Result<Vec<u8>> {
         // Validate key
         if key.is_empty() || key.len() > self.ctx.opts.max_key_size {
