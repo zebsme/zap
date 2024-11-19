@@ -9,9 +9,10 @@ use crate::{
 };
 use bytes::Bytes;
 use dashmap::DashMap;
+use fs2::FileExt;
 use parking_lot::{Mutex, RwLock};
 use std::{
-    fs::{self, create_dir_all, read_dir, remove_dir_all},
+    fs::{self, create_dir_all, read_dir, remove_dir_all, File},
     io::ErrorKind,
     sync::{atomic::AtomicU32, Arc},
 };
@@ -19,6 +20,7 @@ use std::{path::Path, sync::atomic::Ordering};
 
 const FILE_SUFFIX: &str = ".db";
 const INITIAL_FILE_ID: u32 = 0;
+const FILE_LOCK: &str = "file.lock";
 pub(crate) const NON_COMMITTED: u32 = 0;
 #[derive(Debug)]
 pub struct Db {
@@ -28,6 +30,7 @@ pub struct Db {
     file_id: AtomicU32,
     pub sequence_number: Arc<AtomicU32>,
     pub batch_commit_lock: Mutex<()>,
+    lock_file: File,
 }
 
 #[allow(dead_code)]
@@ -36,12 +39,22 @@ impl Db {
         //Validate options
         validate_options(opts)?;
 
-        //Get iterator of all files in the directory
         let dir_path = opts.dir_path.clone();
+        //Get iterator of all files in the directory
         if !dir_path.is_dir() {
             if let Err(e) = create_dir_all(&opts.dir_path) {
                 return Err(Error::Io(e));
             }
+        }
+
+        // Check if the directory is already in use
+        let lock_file = fs::OpenOptions::new()
+            .read(true)
+            .create(true)
+            .append(true)
+            .open(dir_path.join(FILE_LOCK))?;
+        if lock_file.try_lock_exclusive().is_err() {
+            return Err(Error::Unsupported("Database is already in use".to_string()));
         }
 
         process_merge_files(&dir_path)?;
@@ -55,8 +68,6 @@ impl Db {
             Ok(iter) => iter,
             Err(_) => return Err(Error::Io(ErrorKind::PermissionDenied.into())),
         };
-
-        // TODO: Check the directory if it is already being used by another db
 
         // Load all file_ids
         let mut file_ids = dir_iter
@@ -123,6 +134,7 @@ impl Db {
             file_id: AtomicU32::from(file_id),
             sequence_number: Arc::new(AtomicU32::new(current_sequence_number + 1)),
             batch_commit_lock: Mutex::new(()),
+            lock_file,
         };
         Ok(db)
     }
@@ -368,13 +380,13 @@ impl Db {
         loop {
             let (entry, size) = match hint_file.extract_data_entry(offset) {
                 Ok((entry, size)) => (entry, size),
-                Err(_) => {
-                    //FIXME: Handle error
-                    // if e == Error::Io(ErrorKind::UnexpectedEof.into()) {
-                    //     break;
-                    // }
-                    // return Err(e);
-                    break;
+                Err(e) => {
+                    if let Error::Io(ref io_error) = e {
+                        if io_error.kind() == ErrorKind::UnexpectedEof {
+                            break;
+                        }
+                    }
+                    return Err(e);
                 }
             };
 
@@ -396,6 +408,8 @@ impl Db {
         }
 
         self.sync()?;
+
+        self.lock_file.unlock()?;
 
         Ok(())
     }
@@ -421,8 +435,6 @@ fn process_merge_files(dir_path: &Path) -> Result<()> {
                         .unwrap()
                         .into(),
                 );
-                //FIXME:
-                println!("Merge File Path: {:?}", merge_dir.join(merge_file.clone()));
                 let entry = match file_handle.extract_data_entry(0) {
                     Ok((entry, _)) => entry,
                     Err(_) => {
@@ -441,7 +453,6 @@ fn process_merge_files(dir_path: &Path) -> Result<()> {
             }
         }
         Err(_) => {
-            //TODO: Handle error
             return Ok(());
         }
     }
