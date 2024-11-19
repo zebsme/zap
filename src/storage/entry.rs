@@ -1,9 +1,12 @@
 use std::io::ErrorKind;
 
 use bytes::{Buf, BufMut, BytesMut};
-use prost::{decode_length_delimiter, encode_length_delimiter, length_delimiter_len};
+use prost::{
+    decode_length_delimiter, encode_length_delimiter, encoding::decode_varint, length_delimiter_len,
+};
 
 use crate::Error;
+use crate::KeyDirEntry;
 use crate::Result;
 
 #[derive(Debug)]
@@ -151,6 +154,41 @@ impl DataEntry {
     pub fn is_active(&self) -> bool {
         matches!(self.state, State::Active)
     }
+}
+// used for merge
+pub fn decode_keydir_entry(keydir_entry: Vec<u8>) -> Result<KeyDirEntry> {
+    let mut buf = BytesMut::new();
+    buf.put_slice(&keydir_entry);
+
+    let fid = match decode_varint(&mut buf) {
+        Ok(fid) => fid,
+        Err(e) => {
+            return Err(Error::Unsupported(format!(
+                "decode log record fid err: {}",
+                e
+            )))
+        }
+    };
+    let offset = match decode_varint(&mut buf) {
+        Ok(offset) => offset,
+        Err(e) => {
+            return Err(Error::Unsupported(format!(
+                "decode log record fid err: {}",
+                e
+            )))
+        }
+    };
+    let size = match decode_varint(&mut buf) {
+        Ok(size) => size,
+        Err(e) => {
+            return Err(Error::Unsupported(format!(
+                "decode log record fid err: {}",
+                e
+            )))
+        }
+    };
+
+    Ok(KeyDirEntry::new(fid as u32, offset, size as u32))
 }
 
 #[cfg(test)]

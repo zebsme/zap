@@ -2,15 +2,16 @@ use crate::{
     batch::{decode_transaction_key, encode_transaction_key},
     index::{HashMap, Indexer},
     io::StandardIO,
+    merge::MERGE_FINISHED_FILE,
     options::{Context, Opts},
-    storage::{DataEntry, FileHandle},
+    storage::{decode_keydir_entry, DataEntry, FileHandle, HintFile, HINT_FILE_NAME},
     Error, KeyDirEntry, Result, State,
 };
 use bytes::Bytes;
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use std::{
-    fs::{create_dir_all, read_dir},
+    fs::{self, create_dir_all, read_dir, remove_dir_all},
     io::ErrorKind,
     sync::{atomic::AtomicU32, Arc},
 };
@@ -42,6 +43,8 @@ impl Db {
                 return Err(Error::Io(e));
             }
         }
+
+        process_merge_files(&dir_path)?;
 
         // return_dir will return an error in the following situations, but is not limited to just these cases:
         // 1. The provided path doesn't exist.
@@ -353,6 +356,35 @@ impl Db {
         Ok(data_entry)
     }
 
+    pub(crate) fn load_index_from_hint_file(&self) -> Result<()> {
+        let hint_file_name = self.ctx.opts.dir_path.join(HINT_FILE_NAME);
+
+        if !hint_file_name.is_file() {
+            return Ok(());
+        }
+
+        let hint_file = HintFile::new(&self.ctx.opts.dir_path);
+        let mut offset = 0;
+        loop {
+            let (entry, size) = match hint_file.extract_data_entry(offset) {
+                Ok((entry, size)) => (entry, size),
+                Err(_) => {
+                    //FIXME: Handle error
+                    // if e == Error::Io(ErrorKind::UnexpectedEof.into()) {
+                    //     break;
+                    // }
+                    // return Err(e);
+                    break;
+                }
+            };
+
+            let keydir_entry = decode_keydir_entry(entry.get_value().clone())?;
+
+            self.ctx.index.put(entry.get_key().clone(), keydir_entry);
+            offset += size as u64;
+        }
+        Ok(())
+    }
     pub fn sync(&self) -> Result<()> {
         let read_guard = self.active_file.read();
         read_guard.sync()
@@ -367,6 +399,65 @@ impl Db {
 
         Ok(())
     }
+}
+
+fn process_merge_files(dir_path: &Path) -> Result<()> {
+    // Handle merge
+    // Step 1: Check if the merge directory exists
+    let filename = dir_path.file_name().unwrap();
+    let mut merge_dir = dir_path.to_path_buf();
+    merge_dir.set_file_name(format!("{}-merge", filename.to_string_lossy()));
+    let mut unmerged_file_id: u32 = 0;
+    let mut merge_file_names = Vec::new();
+    match read_dir(merge_dir.clone()) {
+        Ok(dir) => {
+            // Check if the merge finished
+            let merge_file = MERGE_FINISHED_FILE.to_string();
+            if merge_dir.join(merge_file.clone()).is_file() {
+                // Merge is finished, load the merged file
+                let file_handle = FileHandle::new(
+                    0,
+                    StandardIO::new(merge_dir.join(merge_file.clone()))
+                        .unwrap()
+                        .into(),
+                );
+                //FIXME:
+                println!("Merge File Path: {:?}", merge_dir.join(merge_file.clone()));
+                let entry = match file_handle.extract_data_entry(0) {
+                    Ok((entry, _)) => entry,
+                    Err(_) => {
+                        remove_dir_all(merge_dir)?;
+                        return Ok(());
+                    }
+                };
+                //Parse from bytes to u32
+                let s = String::from_utf8_lossy(entry.get_value());
+                unmerged_file_id = s.parse::<u32>().unwrap();
+                // Handle files in directory use while let
+                for file in dir {
+                    let file = file?;
+                    merge_file_names.push(file.file_name());
+                }
+            }
+        }
+        Err(_) => {
+            //TODO: Handle error
+            return Ok(());
+        }
+    }
+    for file_id in 0..unmerged_file_id {
+        let file = dir_path.join(format!("{}{}", file_id, FILE_SUFFIX));
+        if file.is_file() {
+            fs::remove_file(file)?;
+        }
+    }
+
+    for file_name in merge_file_names {
+        fs::rename(merge_dir.join(file_name.clone()), dir_path.join(file_name))?;
+    }
+
+    fs::remove_dir_all(merge_dir.clone())?;
+    Ok(())
 }
 
 fn validate_options(options: &Opts) -> Result<()> {

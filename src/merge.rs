@@ -5,8 +5,8 @@ use crate::io::StandardIO;
 use crate::storage::{DataEntry, FileHandle, HintFile};
 use crate::{Error, Result, State};
 
-const MERGE_FINISHED_FILE: &str = "merge_finished";
-const MERGE_FINISHED_KEY: &str = "__MERGE_FINISHED__";
+pub(crate) const MERGE_FINISHED_FILE: &str = "merge_finished";
+pub(crate) const MERGE_FINISHED_KEY: &str = "__MERGE_FINISHED__";
 
 #[allow(dead_code)]
 impl Db {
@@ -98,6 +98,16 @@ mod tests {
     use crate::*;
     #[test]
     fn test_merge() -> Result<()> {
+        // Test the merge operation of the database
+        // Steps:
+        // 1. Create a database instance with specific options.
+        // 2. Insert 1000 key-value pairs with keys "key0" to "key999" and corresponding values.
+        // 3. Update these keys with a new value "value".
+        // 4. Perform a merge operation.
+        // 5. Insert another 1000 key-value pairs with keys "key1001" to "key1999".
+        // 6. Close and reopen the database to simulate a restart.
+        // 7. Verify that the first 1000 keys have the updated value.
+        // 8. Verify that the new keys have the correct values.
         let opts = Opts::new(
             256,
             1024,
@@ -107,13 +117,43 @@ mod tests {
             1024 * 1024,
         );
         let mut db = Db::open(&opts)?;
+
         for i in 0..1000 {
             let key = Bytes::from(format!("key{}", i));
             let value = Bytes::from(format!("value{}", i));
             db.put(key, value)?;
         }
 
+        for i in 0..1000 {
+            let key = Bytes::from(format!("key{}", i));
+            let value = Bytes::from("value");
+            db.put(key, value)?;
+        }
+
         db.merge()?;
+
+        for i in 1001..2000 {
+            let key = Bytes::from(format!("key{}", i));
+            let value = Bytes::from(format!("value{}", i));
+            db.put(key, value)?;
+        }
+
+        db.close()?;
+
+        let db = Db::open(&opts)?;
+        for i in 0..1000 {
+            assert_eq!(
+                db.get(Bytes::from(format!("key{}", i))).unwrap(),
+                "value".as_bytes()
+            );
+        }
+
+        for i in 1001..2000 {
+            assert_eq!(
+                db.get(Bytes::from(format!("key{}", i))).unwrap(),
+                Bytes::from(format!("value{}", i))
+            );
+        }
 
         Ok(())
     }

@@ -5,8 +5,7 @@ use std::{
 };
 
 use super::{DataEntry, FileHandle, State};
-
-const HINT_FILE_NAME: &str = "hint";
+pub const HINT_FILE_NAME: &str = "hint";
 pub struct HintFile(FileHandle);
 
 impl HintFile {
