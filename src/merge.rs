@@ -71,7 +71,7 @@ impl Db {
         let unmerged_file_id = file_handles.last().unwrap().0 + 1;
         let mut merge_finished_file = FileHandle::new(
             0,
-            StandardIO::new(merge_db.ctx.opts.dir_path.join(MERGE_FINISHED_FILE))
+            StandardIO::new(&merge_db.ctx.opts.dir_path.join(MERGE_FINISHED_FILE))
                 .unwrap()
                 .into(),
         );

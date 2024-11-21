@@ -5,7 +5,7 @@ use std::{
     fs::{File, OpenOptions},
     io::Write,
     os::{fd::AsRawFd, unix::fs::FileExt},
-    path::PathBuf,
+    path::Path,
     sync::Arc,
 };
 
@@ -16,12 +16,12 @@ pub struct StandardIO {
 
 #[allow(dead_code)]
 impl StandardIO {
-    pub fn new(path: impl Into<PathBuf>) -> Result<Self> {
+    pub fn new(path: &Path) -> Result<Self> {
         let file = OpenOptions::new()
             .read(true)
             .create(true)
             .append(true)
-            .open(path.into())?;
+            .open(path)?;
         Ok(StandardIO {
             fd: Arc::new(RwLock::new(file)),
         })
@@ -55,7 +55,7 @@ mod tests {
 
     use super::*;
 
-    fn check_and_delete(path: PathBuf) {
+    fn check_and_delete(path: &Path) {
         if path.exists() {
             fs::remove_file(path).unwrap()
         }
@@ -63,9 +63,9 @@ mod tests {
 
     #[test]
     fn test_standard_io_write() {
-        let path = PathBuf::from("/tmp/test_standard_io_write");
-        check_and_delete(path.clone());
-        let res = StandardIO::new(path.clone());
+        let path = Path::new("/tmp/test_standard_io_write");
+        check_and_delete(path);
+        let res = StandardIO::new(path);
         assert!(res.is_ok());
         let mut io = res.ok().unwrap();
 
@@ -80,9 +80,9 @@ mod tests {
 
     #[test]
     fn test_standard_io_read() {
-        let path = PathBuf::from("/tmp/test_standard_io_read");
-        check_and_delete(path.clone());
-        let res = StandardIO::new(path.clone());
+        let path = Path::new("/tmp/test_standard_io_read");
+        check_and_delete(path);
+        let res = StandardIO::new(path);
         assert!(res.is_ok());
         let mut io = res.ok().unwrap();
 
@@ -108,9 +108,9 @@ mod tests {
 
     #[test]
     fn test_file_io_sync() {
-        let path = PathBuf::from("/tmp/test_file_io_sync");
-        check_and_delete(path.clone());
-        let res = StandardIO::new(path.clone());
+        let path = Path::new("/tmp/test_file_io_sync");
+        check_and_delete(path);
+        let res = StandardIO::new(path);
         assert!(res.is_ok());
         let mut io = res.ok().unwrap();
 

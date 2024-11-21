@@ -12,7 +12,7 @@ impl HintFile {
     pub fn new(dir_path: &PathBuf) -> HintFile {
         HintFile(FileHandle::new(
             0,
-            StandardIO::new(Path::new(dir_path).join(HINT_FILE_NAME))
+            StandardIO::new(&Path::new(dir_path).join(HINT_FILE_NAME))
                 .unwrap()
                 .into(),
         ))

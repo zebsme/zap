@@ -1,10 +1,9 @@
 mod mmap;
 mod standard;
-use enum_dispatch::enum_dispatch;
-use mmap::MmapIO;
-pub use standard::StandardIO;
-
 use crate::result::Result;
+use enum_dispatch::enum_dispatch;
+pub use mmap::MmapIO;
+pub use standard::StandardIO;
 
 #[derive(Debug, Clone)]
 #[enum_dispatch]

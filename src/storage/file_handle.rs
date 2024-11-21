@@ -2,12 +2,15 @@ use bytes::{BufMut, BytesMut};
 use prost::length_delimiter_len;
 
 use crate::{
-    io::{IOHandler, IO},
+    io::{IOHandler, StandardIO, IO},
     Error, Result,
 };
-use std::sync::{
-    atomic::{AtomicU32, AtomicU64, Ordering},
-    Arc,
+use std::{
+    path::Path,
+    sync::{
+        atomic::{AtomicU32, AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use super::DataEntry;
@@ -112,6 +115,25 @@ impl FileHandle {
 
         Ok(buf)
     }
+
+    pub fn set_io(&mut self, dir_path: &Path) -> crate::Result<()> {
+        match &self.io {
+            IO::Standard(_) => {
+                return Err(Error::Unsupported(
+                    "Only support change mmap to standard io".to_string(),
+                ))
+            }
+            IO::Mmap(_) => {
+                self.io = StandardIO::new(&Path::new(&dir_path).join(format!(
+                    "{}{}",
+                    self.get_file_id(),
+                    ".db"
+                )))?
+                .into();
+            }
+        }
+        Ok(())
+    }
 }
 
 // Manual Clone implementation for FileHandle
@@ -148,7 +170,7 @@ impl DataFile {
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
+    use std::{path::Path, thread};
 
     use parking_lot::Mutex;
 
@@ -174,7 +196,7 @@ mod tests {
     // Test FileHandle operations
     #[test]
     fn test_filehandle_new() -> Result<()> {
-        let io: IO = StandardIO::new("/tmp/test_filehandle_new")?.into();
+        let io: IO = StandardIO::new(Path::new("/tmp/test_filehandle_new"))?.into();
         let handle = FileHandle::new(42, io);
         assert_eq!(handle.data.get_file_id(), 42);
         Ok(())
@@ -182,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_filehandle_read() -> Result<()> {
-        let io: IO = StandardIO::new("/tmp/test_filehandle_read")?.into();
+        let io: IO = StandardIO::new(Path::new("/tmp/test_filehandle_read"))?.into();
         let mut handle = FileHandle::new(1, io);
         handle.write(b"helloworld")?;
         let mut read_buf = vec![0; 10];
@@ -192,7 +214,7 @@ mod tests {
     }
     #[test]
     fn test_concurrent_filehandle_updates() -> Result<()> {
-        let io: IO = match StandardIO::new("/tmp/test_concurrent") {
+        let io: IO = match StandardIO::new(Path::new("/tmp/test_concurrent")) {
             Ok(io) => io.into(),
             Err(e) => return Err(e),
         };

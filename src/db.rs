@@ -1,7 +1,7 @@
 use crate::{
     batch::{decode_transaction_key, encode_transaction_key},
     index::{HashMap, Indexer},
-    io::StandardIO,
+    io::{MmapIO, StandardIO},
     merge::MERGE_FINISHED_FILE,
     options::{Context, Opts},
     storage::{decode_keydir_entry, DataEntry, FileHandle, HintFile, HINT_FILE_NAME},
@@ -95,8 +95,8 @@ impl Db {
             .map(|file_id| {
                 let filehandle = FileHandle::new(
                     *file_id,
-                    StandardIO::new(
-                        Path::new(&opts.dir_path).join(format!("{}{}", file_id, FILE_SUFFIX)),
+                    MmapIO::new(
+                        &Path::new(&opts.dir_path).join(format!("{}{}", file_id, FILE_SUFFIX)),
                     )
                     .unwrap()
                     .into(),
@@ -119,8 +119,8 @@ impl Db {
             }
             None => FileHandle::new(
                 INITIAL_FILE_ID,
-                StandardIO::new(
-                    Path::new(&dir_path).join(format!("{}{}", INITIAL_FILE_ID, FILE_SUFFIX,)),
+                MmapIO::new(
+                    &Path::new(&dir_path).join(format!("{}{}", INITIAL_FILE_ID, FILE_SUFFIX,)),
                 )?
                 .into(),
             ),
@@ -136,6 +136,18 @@ impl Db {
             batch_commit_lock: Mutex::new(()),
             lock_file,
         };
+
+        let mut write_guard = db.active_file.write();
+        write_guard.set_io(&dir_path)?;
+        drop(write_guard);
+
+        for file in db.inactive_files.iter() {
+            let mut file = file.value().to_owned();
+            file.set_io(&dir_path)?;
+        }
+
+        db.load_index_from_hint_file()?;
+
         Ok(db)
     }
 
@@ -278,7 +290,7 @@ impl Db {
             // create new file
             let new_file = FileHandle::new(
                 current_fid + 1,
-                StandardIO::new(Path::new(&dir_path).join(format!(
+                StandardIO::new(&Path::new(&dir_path).join(format!(
                     "{}{}",
                     self.file_id.load(Ordering::SeqCst),
                     FILE_SUFFIX,
@@ -310,7 +322,7 @@ impl Db {
         // create new file
         let new_file = FileHandle::new(
             current_fid + 1,
-            StandardIO::new(Path::new(&self.ctx.opts.dir_path).join(format!(
+            StandardIO::new(&Path::new(&self.ctx.opts.dir_path).join(format!(
                 "{}{}",
                 self.file_id.load(Ordering::SeqCst),
                 FILE_SUFFIX,
@@ -431,7 +443,7 @@ fn process_merge_files(dir_path: &Path) -> Result<()> {
                 // Merge is finished, load the merged file
                 let file_handle = FileHandle::new(
                     0,
-                    StandardIO::new(merge_dir.join(merge_file.clone()))
+                    StandardIO::new(&merge_dir.join(merge_file.clone()))
                         .unwrap()
                         .into(),
                 );
