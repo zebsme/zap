@@ -508,6 +508,12 @@ fn validate_options(options: &Opts) -> Result<()> {
     Ok(())
 }
 
+impl Drop for Db {
+    fn drop(&mut self) {
+        self.close().expect("failed to close db");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;

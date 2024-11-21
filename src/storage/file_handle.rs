@@ -3,7 +3,7 @@ use prost::length_delimiter_len;
 
 use crate::{
     io::{IOHandler, IO},
-    Result,
+    Error, Result,
 };
 use std::sync::{
     atomic::{AtomicU32, AtomicU64, Ordering},
@@ -37,6 +37,7 @@ impl FileHandle {
     pub fn read(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
         match &self.io {
             IO::Standard(io) => io.read(buf, offset),
+            IO::Mmap(io) => io.read(buf, offset),
         }
     }
 
@@ -44,6 +45,11 @@ impl FileHandle {
         let current_offset = self.data.offset.load(Ordering::Relaxed);
         let written = match &mut self.io {
             IO::Standard(io) => io.write(buf)?,
+            IO::Mmap(_) => {
+                return Err(Error::Unsupported(
+                    "Mmap does not support write".to_string(),
+                ))
+            }
         };
         self.data
             .offset
@@ -54,6 +60,7 @@ impl FileHandle {
     pub fn sync(&self) -> Result<()> {
         match &self.io {
             IO::Standard(io) => io.sync(),
+            IO::Mmap(_) => Err(Error::Unsupported("Mmap does not support sync".to_string())),
         }
     }
 

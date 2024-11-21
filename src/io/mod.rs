@@ -1,5 +1,7 @@
+mod mmap;
 mod standard;
 use enum_dispatch::enum_dispatch;
+use mmap::MmapIO;
 pub use standard::StandardIO;
 
 use crate::result::Result;
@@ -8,6 +10,7 @@ use crate::result::Result;
 #[enum_dispatch]
 pub enum IO {
     Standard(StandardIO),
+    Mmap(MmapIO),
 }
 
 #[enum_dispatch(IO)]

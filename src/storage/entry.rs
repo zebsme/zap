@@ -23,14 +23,14 @@ pub enum State {
     Committed,
 }
 
-impl From<u8> for State {
-    fn from(v: u8) -> Self {
+impl TryFrom<u8> for State {
+    type Error = Error;
+    fn try_from(v: u8) -> Result<Self> {
         match v {
-            0 => State::Active,
-            1 => State::Inactive,
-            2 => State::Committed,
-            //TODO: should panic?
-            _ => panic!("Invalid state value"),
+            0 => Ok(State::Active),
+            1 => Ok(State::Inactive),
+            2 => Ok(State::Committed),
+            _ => Err(Error::Unsupported(format!("Unsupported state: {}", v))),
         }
     }
 }
@@ -112,7 +112,6 @@ impl DataEntry {
     }
 
     pub fn decode_header(mut header_buf: BytesMut) -> Result<(usize, usize, usize, u8)> {
-        //FIXME: when call put function
         let state = header_buf.get_u8();
 
         // Get actual header size
@@ -140,7 +139,7 @@ impl DataEntry {
         let data_entry = DataEntry::new(
             body_buf.get(..key_size).unwrap().to_vec(),
             body_buf.get(key_size..body_buf.len() - 4).unwrap().to_vec(),
-            State::from(state),
+            state.try_into()?,
         );
 
         body_buf.advance(key_size + value_size);
