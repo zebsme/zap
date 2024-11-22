@@ -425,6 +425,31 @@ impl Db {
 
         Ok(())
     }
+
+    pub fn back_up(&self, dir_path: &Path) -> Result<()> {
+        copy_recursive(&self.ctx.opts.dir_path, dir_path)?;
+        Ok(())
+    }
+}
+
+fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
+    if !dst.exists() {
+        create_dir_all(dst)?;
+    }
+    for dentry in read_dir(src)? {
+        let dentry = dentry?;
+        let src_path = dentry.path();
+        if src_path.file_name().unwrap() == FILE_LOCK {
+            continue;
+        }
+        let dst_path = dst.join(dentry.file_name());
+        if dentry.file_type()?.is_dir() {
+            copy_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
 }
 
 fn process_merge_files(dir_path: &Path) -> Result<()> {
@@ -712,6 +737,29 @@ mod tests {
         assert!(close_res.is_ok());
 
         std::fs::remove_dir_all(opts.clone().dir_path).expect("failed to remove path");
+        Ok(())
+    }
+
+    #[test]
+    fn test_back_up() -> Result<()> {
+        let opts = Opts::new(
+            256,
+            1024,
+            false,
+            true,
+            "/tmp/test_back_up".to_string(),
+            1024 * 1024,
+        );
+        let mut db = Db::open(&opts)?;
+
+        let key = Bytes::from("key");
+        let value = Bytes::from("value");
+        db.put(key.clone(), value)?;
+
+        let back_up_path = "/tmp/back_up_test";
+        let back_up_res = db.back_up(Path::new(back_up_path));
+        assert!(back_up_res.is_ok());
+
         Ok(())
     }
 }
