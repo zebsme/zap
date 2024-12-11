@@ -1,9 +1,9 @@
 mod batch;
-mod db;
+pub mod db;
 mod index;
 mod io;
 mod merge;
-mod options;
+pub mod options;
 mod result;
 mod storage;
 pub use self::{

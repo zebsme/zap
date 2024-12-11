@@ -22,11 +22,11 @@ impl Default for Opts {
     fn default() -> Self {
         Opts {
             max_key_size: 256,
-            max_value_size: 1024,
+            max_value_size: 2048,
             read_only: false,
             sync_writes: true,
             dir_path: PathBuf::from("/tmp"),
-            data_file_size: 1024 * 1024 * 1024,
+            data_file_size: 256 * 1024 * 1024,
         }
     }
 }

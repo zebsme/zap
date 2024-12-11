@@ -258,7 +258,7 @@ impl Db {
             return Err(Error::Unsupported(format!(
                 "limited max_value_size: {}, actual value size:{}",
                 self.ctx.opts.max_key_size,
-                key.len()
+                value.len()
             )));
         }
 

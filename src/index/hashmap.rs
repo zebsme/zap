@@ -76,6 +76,11 @@ impl HashMap {
     }
 }
 
+impl Default for HashMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 #[cfg(test)]
 #[allow(clippy::all)]
 mod tests {
